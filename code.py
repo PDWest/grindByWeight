@@ -9,7 +9,7 @@ last_position = 0
 # 2. Clear the screen text layers using terminal escape codes
 print("\033[2J\033[H") 
 print("==============================")
-print("     M5 DIAL ENCODER SYSTEM   ")
+print("     M5 DIAL ENCODER SYSTEM!   ")
 print("==============================")
 print(f"Current Position: {last_position}")
 
@@ -23,7 +23,7 @@ while True:
         # \033[2J\033[H clears the screen and moves the cursor to the top left
         print("\033[2J\033[H") 
         print("==============================")
-        print("     M5 DIAL ENCODER SYSTEM   ")
+        print("     M5 DIAL ENCODER SYSTEM!  ")
         print("==============================")
         print(f"Current Position: {current_position}")
         
