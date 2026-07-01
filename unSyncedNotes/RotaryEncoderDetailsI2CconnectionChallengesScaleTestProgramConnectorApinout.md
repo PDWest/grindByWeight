@@ -84,6 +84,33 @@ Port A is the **red Grove I²C port (HY2.0-4P)**. M5Stack cable colors:
 
 ---
 
+## 3b. M5 Dial Port B pinout
+
+Port B is the **black general-purpose I/O Grove port (HY2.0-4P)** — plain GPIO
+(digital in/out, ADC/DAC-capable), no I²C helper. M5Stack cable colors:
+
+| Wire color | Function      | M5 Dial net | CircuitPython     |
+|------------|---------------|-------------|-------------------|
+| Black      | GND           | GND         | —                 |
+| Red        | VCC           | **5 V**     | —                 |
+| Yellow     | GPIO (input)  | GPIO 1      | `board.PORTB_IN`  |
+| White      | GPIO (output) | GPIO 2      | `board.PORTB_OUT` |
+
+- **Confirmed:** `dir(board)` lists both `PORTB_IN` and `PORTB_OUT`, plus `A1`,
+  `A2`, `D1`, `D2`. `PORTB_OUT` = **GPIO 2** (used in `code.py` as a
+  `digitalio.DigitalInOut` output mirroring encoder parity — high for odd
+  positions, low for even). `PORTB_IN` = **GPIO 1**.
+- The board exposes analog aliases **`A1` = GPIO 1** and **`A2` = GPIO 2**, which
+  is why these pins are **ADC-capable** — Port B can do analog input (or
+  DAC/PWM), not just digital.
+- Both signal pins are **3.3 V logic**; the VCC pin is **5 V** — same caution as
+  Port A if you power a 3.3 V-logic device from it.
+- Still unconfirmed: the exact **wire-color ↔ pin** order (yellow vs. white),
+  since Grove cable coloring can vary. To nail it down, compare the pin objects:
+  `board.PORTB_IN is board.A1` / `board.PORTB_OUT is board.A2`.
+
+---
+
 ## 4. The 5 V / 3.3 V power problem
 
 **Measured: 5 V between red and black on Port A.**
