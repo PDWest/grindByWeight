@@ -6,7 +6,7 @@
 [project attributes]
 console.toolbox = [{'adjust_colors': True,
                     'autosave': True,
-                    'cmd': 'rsync -rtv --delete --exclude=\'.git*\' --exclude=\'*.wpr\' --exclude=\'*.wpu\' --exclude=\'*.pyc\' "/home/phil/repos/grindByWeight/" "/media/phil/CIRCUITPY/"\n',
+                    'cmd': 'rsync -rtv --delete --exclude=\'.git*\' --exclude=\'CLAUDE.md\' --exclude=\'*.wpr\' --exclude=\'*.wpu\' --exclude=\'*.pyc\' "/home/phil/repos/grindByWeight/" "/media/phil/CIRCUITPY/"\n',
                     'context': ('project',
                                 None),
                     'env': ('project',
