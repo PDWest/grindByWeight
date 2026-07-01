@@ -3,7 +3,7 @@
 ## Core Target System
 - **Microcontroller Board:** M5Stack Dial (V1.1) Smart Rotary Knob
 - **Core Processor:** Espressif ESP32-S3 (StampS3A Controller Module)
-- **Firmware Environment:** Adafruit CircuitPython (Target version: 9.x+)
+- **Firmware Environment:** Adafruit CircuitPython (Target version: 10.3+)
 - **Board ID:** `m5stack_dial`
 
 ## Connected Hardware & External Sensors
