@@ -25,13 +25,14 @@ MAX_SETPOINT = 5000.0      # ...or above this
 
 # --------------------------------------------------------------- scale config
 ACTIVE_CHANNEL = 1         # NAU7802 channel wired to the load cell (1 or 2)
-SMOOTHING = 10             # readings kept in the moving average (steadier = larger)
+CONVERSION_RATE = 320      # hardware sample rate, SPS (10/20/40/80/320)
+SAMPLE_COUNT = 10          # readings per median-filtered measurement
+DECISION_PERIOD = 0.1      # seconds between weight decisions + display updates
 ENCODER_SIGN = -1          # clockwise increases weight (this unit counts down CW)
 
 # ---------------------------------------------------------------- hardware init
 # Rotary encoder on the confirmed onboard pins.
 encoder = rotaryio.IncrementalEncoder(board.ENC_A, board.ENC_B)
-last_position = encoder.position
 
 # Rear Port B digital output (GPIO2).  Starts LOW.
 portb = digitalio.DigitalInOut(board.PORTB_OUT)
@@ -44,16 +45,45 @@ scale = NAU7802(i2c, address=0x2A, active_channels=1)
 if not scale.enable(True):
     print("!! NAU7802 did not report ready; continuing anyway.")
 scale.channel = ACTIVE_CHANNEL
-scale.calibrate("INTERNAL")    # required ADC self-calibration
+scale.conversion_rate = CONVERSION_RATE   # set rate before calibrating
+scale.calibrate("INTERNAL")               # required ADC self-calibration
 
 # ------------------------------------------------------------- running state
 set_point = 20.0               # current target weight in grams (startup default)
-samples = []                   # moving-average buffer of gram readings
-weight = 0.0                   # latest smoothed weight in grams
+last_position = encoder.position
+weight = 0.0                   # latest filtered weight in grams
 
 
 def clamp(value, low, high):
     return max(low, min(high, value))
+
+
+def update_setpoint():
+    """Poll the dial and adjust the target. Called often to stay responsive."""
+    global set_point, last_position
+    position = encoder.position
+    if position != last_position:
+        # Accumulate the delta so turning below zero and back has no dead-zone.
+        set_point += ENCODER_SIGN * (position - last_position) * GRAMS_PER_DETENT
+        set_point = round(clamp(set_point, MIN_SETPOINT, MAX_SETPOINT), 1)
+        last_position = position
+
+
+def get_filtered_reading(samples=SAMPLE_COUNT):
+    """Gather `samples` conversions and return their median in grams.
+
+    Median filtering drops single-sample electrical spikes. The dial is polled
+    while we wait for conversions so it stays responsive during sampling.
+    """
+    raw = []
+    while len(raw) < samples:
+        if scale.available():
+            raw.append(scale.read())
+        else:
+            update_setpoint()
+    raw.sort()
+    median = raw[len(raw) // 2]
+    return (median - ZERO_OFFSET) / COUNTS_PER_GRAM
 
 
 def draw(target, grams, output_on):
@@ -70,40 +100,22 @@ def draw(target, grams, output_on):
 
 # --------------------------------------------------------------- initial paint
 draw(set_point, weight, portb.value)
-last_draw = time.monotonic()
+last_tick = time.monotonic()
 
 # --------------------------------------------------------------- control loop
 while True:
-    dirty = False
+    # Keep the dial responsive between weight decisions.
+    update_setpoint()
 
-    # 1. Update the target from the dial.  Accumulate the delta so turning
-    #    below zero and back up has no dead-zone at the clamp.
-    position = encoder.position
-    if position != last_position:
-        set_point += ENCODER_SIGN * (position - last_position) * GRAMS_PER_DETENT
-        set_point = round(clamp(set_point, MIN_SETPOINT, MAX_SETPOINT), 1)
-        last_position = position
-        dirty = True
-
-    # 2. Fold any new conversion into the moving average (non-blocking).
-    if scale.available():
-        grams = (scale.read() - ZERO_OFFSET) / COUNTS_PER_GRAM
-        samples.append(grams)
-        if len(samples) > SMOOTHING:
-            samples.pop(0)
-        weight = sum(samples) / len(samples)
-        dirty = True
-
-    # 3. Drive the output: HIGH while under target, LOW once reached/exceeded.
-    output_on = weight < set_point
-    if output_on != portb.value:
-        portb.value = output_on
-        dirty = True
-
-    # 4. Refresh the display at most ~5x/second when something changed.
     now = time.monotonic()
-    if dirty and (now - last_draw) >= 0.2:
-        draw(set_point, weight, portb.value)
-        last_draw = now
+    if now - last_tick >= DECISION_PERIOD:
+        last_tick = now
 
-    time.sleep(0.01)
+        # Read a median-filtered weight and decide the output:
+        # HIGH while under target, LOW once the target is reached/exceeded.
+        weight = get_filtered_reading()
+        portb.value = weight < set_point
+
+        draw(set_point, weight, portb.value)
+
+    time.sleep(0.005)
