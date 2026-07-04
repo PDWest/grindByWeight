@@ -25,8 +25,8 @@ MAX_SETPOINT = 5000.0      # ...or above this
 
 # --------------------------------------------------------------- scale config
 ACTIVE_CHANNEL = 1         # NAU7802 channel wired to the load cell (1 or 2)
-CONVERSION_RATE = 320      # hardware sample rate, SPS (10/20/40/80/320)
-SAMPLE_COUNT = 10          # readings per median-filtered measurement
+CONVERSION_RATE = 80      # hardware sample rate, SPS (10/20/40/80/320)
+SAMPLE_COUNT = 8          # readings per median-filtered measurement
 DECISION_PERIOD = 0.1      # seconds between weight decisions + display updates
 ENCODER_SIGN = -1          # clockwise increases weight (this unit counts down CW)
 
@@ -52,6 +52,7 @@ scale.calibrate("INTERNAL")               # required ADC self-calibration
 set_point = 20.0               # current target weight in grams (startup default)
 last_position = encoder.position
 weight = 0.0                   # latest filtered weight in grams
+window = []                    # sliding window of the most recent raw counts
 
 
 def clamp(value, low, high):
@@ -69,20 +70,25 @@ def update_setpoint():
         last_position = position
 
 
-def get_filtered_reading(samples=SAMPLE_COUNT):
-    """Gather `samples` conversions and return their median in grams.
+def poll_scale():
+    """Drain any ready conversions into the sliding window (newest at the end).
 
-    Median filtering drops single-sample electrical spikes. The dial is polled
-    while we wait for conversions so it stays responsive during sampling.
+    Runs every loop pass, so the window continuously tracks the most recent
+    SAMPLE_COUNT raw readings regardless of how often we compute a median.
     """
-    raw = []
-    while len(raw) < samples:
-        if scale.available():
-            raw.append(scale.read())
-        else:
-            update_setpoint()
-    raw.sort()
-    median = raw[len(raw) // 2]
+    global window
+    while scale.available():
+        window.append(scale.read())
+    if len(window) > SAMPLE_COUNT:
+        window = window[-SAMPLE_COUNT:]
+
+
+def filtered_weight():
+    """Median of the current window, in grams. Rejects single-sample spikes."""
+    if not window:
+        return weight              # no samples yet; keep the last value
+    ordered = sorted(window)
+    median = ordered[len(ordered) // 2]
     return (median - ZERO_OFFSET) / COUNTS_PER_GRAM
 
 
@@ -104,16 +110,17 @@ last_tick = time.monotonic()
 
 # --------------------------------------------------------------- control loop
 while True:
-    # Keep the dial responsive between weight decisions.
+    # Keep the dial responsive and the sample window fresh every pass.
     update_setpoint()
+    poll_scale()
 
     now = time.monotonic()
     if now - last_tick >= DECISION_PERIOD:
         last_tick = now
 
-        # Read a median-filtered weight and decide the output:
+        # Median-filter the current window and decide the output:
         # HIGH while under target, LOW once the target is reached/exceeded.
-        weight = get_filtered_reading()
+        weight = filtered_weight()
         portb.value = weight < set_point
 
         draw(set_point, weight, portb.value)
