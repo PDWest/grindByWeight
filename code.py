@@ -87,8 +87,12 @@ def poll_scale():
     SAMPLE_COUNT raw readings regardless of how often we compute a median.
     """
     global window
-    while scale.available():
-        window.append(scale.read())
+    try:
+        while scale.available():
+            window.append(scale.read())
+    except OSError:
+        # Transient I2C glitch (EIO); skip this pass and retry next loop.
+        return
     if len(window) > SAMPLE_COUNT:
         window = window[-SAMPLE_COUNT:]
 
