@@ -26,7 +26,7 @@ MAX_SETPOINT = 5000.0      # ...or above this
 # --------------------------------------------------------------- scale config
 ACTIVE_CHANNEL = 1         # NAU7802 channel wired to the load cell (1 or 2)
 CONVERSION_RATE = 80      # hardware sample rate, SPS (10/20/40/80/320)
-SAMPLE_COUNT = 8          # readings per median-filtered measurement
+SAMPLE_COUNT = 16          # readings per median-filtered measurement
 DECISION_PERIOD = 0.1      # seconds between weight decisions + display updates
 ENCODER_SIGN = -1          # clockwise increases weight (this unit counts down CW)
 
@@ -38,6 +38,11 @@ encoder = rotaryio.IncrementalEncoder(board.ENC_A, board.ENC_B)
 portb = digitalio.DigitalInOut(board.PORTB_OUT)
 portb.direction = digitalio.Direction.OUTPUT
 portb.value = False
+
+# Bezel push button (GPIO42).  Active-low: value is False while held down.
+button = digitalio.DigitalInOut(board.BTN)
+button.direction = digitalio.Direction.INPUT
+button.pull = digitalio.Pull.UP
 
 # NAU7802 scale on Port A (explicit routing per CLAUDE.md).
 i2c = board.PORTA_I2C()
@@ -53,6 +58,7 @@ set_point = 20.0               # current target weight in grams (startup default
 last_position = encoder.position
 weight = 0.0                   # latest filtered weight in grams
 window = []                    # sliding window of the most recent raw counts
+button_was_down = False        # edge-detect state for the bezel button
 
 
 def clamp(value, low, high):
@@ -83,13 +89,36 @@ def poll_scale():
         window = window[-SAMPLE_COUNT:]
 
 
+def median_raw():
+    """Median raw count of the current window (assumes window is non-empty)."""
+    ordered = sorted(window)
+    return ordered[len(ordered) // 2]
+
+
 def filtered_weight():
     """Median of the current window, in grams. Rejects single-sample spikes."""
     if not window:
         return weight              # no samples yet; keep the last value
-    ordered = sorted(window)
-    median = ordered[len(ordered) // 2]
-    return (median - ZERO_OFFSET) / COUNTS_PER_GRAM
+    return (median_raw() - ZERO_OFFSET) / COUNTS_PER_GRAM
+
+
+def tare():
+    """Zero the scale: set the offset to the current median raw reading."""
+    global ZERO_OFFSET, weight
+    if window:
+        ZERO_OFFSET = median_raw()
+        weight = 0.0
+        portb.value = weight < set_point
+        draw(set_point, weight, portb.value)   # immediate feedback
+
+
+def check_button():
+    """Tare once on each fresh press of the bezel button (active-low)."""
+    global button_was_down
+    pressed = not button.value
+    if pressed and not button_was_down:
+        tare()
+    button_was_down = pressed
 
 
 def draw(target, grams, output_on):
@@ -113,6 +142,7 @@ while True:
     # Keep the dial responsive and the sample window fresh every pass.
     update_setpoint()
     poll_scale()
+    check_button()
 
     now = time.monotonic()
     if now - last_tick >= DECISION_PERIOD:
