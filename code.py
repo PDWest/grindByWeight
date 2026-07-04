@@ -180,8 +180,8 @@ _background = displayio.TileGrid(_bg_bitmap, pixel_shader=_bg_palette)
 TITLE_TEXT = "GRIND BY WEIGHT"
 TITLE_SCALE = 2
 TITLE_COLOR = 0xFFA500
-ARC_RADIUS = 96
-CHAR_ADV = 6 * TITLE_SCALE      # per-character advance width, pixels
+ARC_RADIUS = 106
+CHAR_ADV = 6 * TITLE_SCALE + 1  # per-character advance width, pixels (+1 spacing)
 
 
 def build_arc_title():
