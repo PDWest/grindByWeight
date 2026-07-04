@@ -7,6 +7,7 @@ import displayio
 import terminalio
 import adafruit_focaltouch
 from adafruit_display_text import label
+from vectorio import Rectangle
 from cedargrove_nau7802 import NAU7802
 
 # ============================================================================
@@ -73,6 +74,7 @@ set_point = 20.0               # current target weight in grams (startup default
 last_position = encoder.position
 weight = 0.0                   # latest filtered weight in grams
 window = []                    # sliding window of the most recent raw counts
+running = False                # START/STOP latch (toggled by lower-half taps)
 
 
 def clamp(value, low, high):
@@ -120,14 +122,27 @@ def filtered_weight():
     return (median_raw() - ZERO_OFFSET) / COUNTS_PER_GRAM
 
 
+def apply_output():
+    """Engage the grinder only while started AND still under the target."""
+    portb.value = running and (weight < set_point)
+
+
 def tare():
     """Zero the scale: set the offset to the current median raw reading."""
     global ZERO_OFFSET, weight
     if window:
         ZERO_OFFSET = median_raw()
         weight = 0.0
-        portb.value = weight < set_point
-        draw_values(set_point, weight, portb.value)   # immediate feedback
+        apply_output()
+        draw_values(set_point, weight, running)       # immediate feedback
+
+
+def toggle_running():
+    """Flip the START/STOP latch (lower-half tap) and update output at once."""
+    global running
+    running = not running
+    apply_output()
+    draw_values(set_point, weight, running)
 
 
 _touch_was_down = False        # edge-detect state for the touch screen
@@ -136,11 +151,12 @@ touch_y = -1                   # (-1, -1) means "no touch seen yet"
 
 
 def check_touch():
-    """Tare on each new screen touch and record the touch location.
+    """Dispatch a new screen touch by region and record its location.
 
-    Uses touch.touches (the safe coordinate array) rather than touch.points,
-    which can crash this controller's register reads.  touch_x / touch_y hold
-    the most recent location and update continuously while a finger is down.
+    Upper half taps tare the scale; lower half taps toggle START/STOP.  Uses
+    touch.touches (the safe coordinate array) rather than touch.points, which
+    can crash this controller's register reads.  touch_x / touch_y hold the
+    most recent location and update continuously while a finger is down.
     """
     global _touch_was_down, touch_x, touch_y
     if touch is None:
@@ -155,7 +171,10 @@ def check_touch():
     except OSError:
         return                 # transient I2C glitch; try again next pass
     if active and not _touch_was_down:
-        tare()
+        if touch_y < CY:
+            tare()             # upper half: zero the scale
+        else:
+            toggle_running()   # lower half: start / stop the grinder
     _touch_was_down = active
 
 
@@ -203,34 +222,47 @@ def build_arc_title():
 
 title_group = build_arc_title()
 
-# Centered value labels.  The weight is largest since it's what you watch while
-# grinding; the output line recolors (green = grinding, grey = stopped).
-setpoint_lbl = label.Label(terminalio.FONT, text="", scale=2, color=0xFFFFFF,
-                           anchor_point=(0.5, 0.5), anchored_position=(CX, 100))
+# Two touch zones split at the vertical middle (CY):
+#   UPPER = arced title + live measured weight   -> tap anywhere to tare
+#   LOWER = target set point + START/STOP button -> tap anywhere to start/stop
+# A faint divider line marks the boundary between the two regions.
+_line_palette = displayio.Palette(1)
+_line_palette[0] = 0x404040
+_divider = Rectangle(pixel_shader=_line_palette, width=display.width, height=2,
+                     x=0, y=CY - 1)
+
+# Upper zone: the live measured weight (the value you watch while grinding).
 weight_lbl = label.Label(terminalio.FONT, text="", scale=3, color=0xFFFFFF,
-                         anchor_point=(0.5, 0.5), anchored_position=(CX, 138))
-output_lbl = label.Label(terminalio.FONT, text="", scale=2, color=0xFFFFFF,
-                         anchor_point=(0.5, 0.5), anchored_position=(CX, 182))
+                         anchor_point=(0.5, 0.5), anchored_position=(CX, 96))
+
+# Lower zone: the target set point (number only) and the START/STOP indicator.
+setpoint_lbl = label.Label(terminalio.FONT, text="", scale=3, color=0xFFA500,
+                           anchor_point=(0.5, 0.5), anchored_position=(CX, 152))
+startstop_lbl = label.Label(terminalio.FONT, text="", scale=2, color=0xFFFFFF,
+                            anchor_point=(0.5, 0.5), anchored_position=(CX, 196))
 
 _group = displayio.Group()
 _group.append(_background)
+_group.append(_divider)
 _group.append(title_group)
-_group.append(setpoint_lbl)
 _group.append(weight_lbl)
-_group.append(output_lbl)
+_group.append(setpoint_lbl)
+_group.append(startstop_lbl)
 display.root_group = _group
 
 
-def draw_values(target, grams, output_on):
-    """Update the centered labels on the round display."""
-    setpoint_lbl.text = "Set {:.1f} g".format(target)
+def draw_values(target, grams, running_state):
+    """Refresh measured weight (upper) and set point + START/STOP (lower)."""
     weight_lbl.text = "{:.1f} g".format(grams)
-    output_lbl.text = "GRINDING" if output_on else "STOPPED"
-    output_lbl.color = 0x00FF00 if output_on else 0x808080
+    setpoint_lbl.text = "{:.1f} g".format(target)
+    # The indicator shows the action a tap will take: STOP while running (red),
+    # START while idle (green).
+    startstop_lbl.text = "STOP" if running_state else "START"
+    startstop_lbl.color = 0xFF3030 if running_state else 0x00FF00
 
 
 # --------------------------------------------------------------- initial paint
-draw_values(set_point, weight, portb.value)
+draw_values(set_point, weight, running)
 last_tick = time.monotonic()
 
 # --------------------------------------------------------------- control loop
@@ -244,11 +276,11 @@ while True:
     if now - last_tick >= DECISION_PERIOD:
         last_tick = now
 
-        # Median-filter the current window and decide the output:
-        # HIGH while under target, LOW once the target is reached/exceeded.
+        # Median-filter the current window, then apply the output: engaged only
+        # while STARTed and still under target (STOP or reaching target cuts it).
         weight = filtered_weight()
-        portb.value = weight < set_point
+        apply_output()
 
-        draw_values(set_point, weight, portb.value)
+        draw_values(set_point, weight, running)
 
     time.sleep(0.005)
