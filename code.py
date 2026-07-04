@@ -1,9 +1,12 @@
 import time
+import math
 import board
 import rotaryio
 import digitalio
-import keypad
-import microcontroller
+import displayio
+import terminalio
+import adafruit_focaltouch
+from adafruit_display_text import label
 from cedargrove_nau7802 import NAU7802
 
 # ============================================================================
@@ -41,13 +44,20 @@ portb = digitalio.DigitalInOut(board.PORTB_OUT)
 portb.direction = digitalio.Direction.OUTPUT
 portb.value = False
 
-# Bezel push button on GPIO42.  keypad.Keys handles debounce and edge events;
-# value_when_pressed=False because the button grounds the pin when pressed.
-bezel_button = keypad.Keys(
-    (microcontroller.pin.GPIO42,),
-    value_when_pressed=False,
-    pull=True,
-)
+# Capacitive touch screen (FocalTech FT6336U) on the board's internal I2C bus.
+# A touch anywhere on the screen tares the scale.  The FT6336U can take a few
+# seconds to wake and answer at 0x38 after a soft reboot, so retry the probe for
+# up to ~4 s before giving up; if it never appears, touch-to-tare is disabled.
+touch_i2c = board.I2C()
+touch = None
+for _attempt in range(20):
+    try:
+        touch = adafruit_focaltouch.Adafruit_FocalTouch(touch_i2c)
+        break
+    except (ValueError, OSError):
+        time.sleep(0.2)
+if touch is None:
+    print("!! Touch controller not found at 0x38; touch-to-tare disabled.")
 
 # NAU7802 scale on Port A (explicit routing per CLAUDE.md).
 i2c = board.PORTA_I2C()
@@ -120,49 +130,105 @@ def tare():
         draw_values(set_point, weight, portb.value)   # immediate feedback
 
 
-def check_button():
-    """Tare on each press of the bezel button (keypad handles debounce)."""
-    event = bezel_button.events.get()
-    if event and event.pressed:
+_touch_was_down = False        # edge-detect state for the touch screen
+touch_x = -1                   # last touch location in screen pixels;
+touch_y = -1                   # (-1, -1) means "no touch seen yet"
+
+
+def check_touch():
+    """Tare on each new screen touch and record the touch location.
+
+    Uses touch.touches (the safe coordinate array) rather than touch.points,
+    which can crash this controller's register reads.  touch_x / touch_y hold
+    the most recent location and update continuously while a finger is down.
+    """
+    global _touch_was_down, touch_x, touch_y
+    if touch is None:
+        return                 # touch controller absent; nothing to do
+    try:
+        active = bool(touch.touched)
+        if active:
+            points = touch.touches
+            if points:
+                touch_x = points[0]["x"]
+                touch_y = points[0]["y"]
+    except OSError:
+        return                 # transient I2C glitch; try again next pass
+    if active and not _touch_was_down:
         tare()
+    _touch_was_down = active
 
 
-# Console layout: 1-based rows of the changing values, and the column where
-# each value begins (just past the 12-character labels below).
-ROW_SETPOINT = 5
-ROW_WEIGHT = 6
-ROW_OUTPUT = 7
-VALUE_COL = 13
+# --------------------------------------------------------------- round display
+# The GC9A01 is a 240x240 CIRCULAR panel: only the middle rows are full-width.
+# Every label is horizontally centered (anchor_point x=0.5) and clustered near
+# the vertical middle so nothing is clipped by the round bezel.
+display = board.DISPLAY
+CX = display.width // 2
+CY = display.height // 2
+
+# Solid black backdrop so the console text underneath doesn't show through.
+_bg_bitmap = displayio.Bitmap(display.width, display.height, 1)
+_bg_palette = displayio.Palette(1)
+_bg_palette[0] = 0x000000
+_background = displayio.TileGrid(_bg_bitmap, pixel_shader=_bg_palette)
+
+# Curved title: each character is its own label placed on an arc concentric
+# with the round bezel, so "GRIND BY WEIGHT" follows the top contour.  The
+# terminalio font can't tilt to the tangent, so letters stay upright on the
+# curve.  Smaller ARC_RADIUS -> lower and more curved; larger -> higher/flatter.
+TITLE_TEXT = "GRIND BY WEIGHT"
+TITLE_SCALE = 2
+TITLE_COLOR = 0xFFA500
+ARC_RADIUS = 96
+CHAR_ADV = 6 * TITLE_SCALE      # per-character advance width, pixels
 
 
-def draw_static():
-    """Clear the screen and print the banner + labels once."""
-    print("\033[2J\033[H")
-    print("==============================")
-    print("      GRIND BY WEIGHT         ")
-    print("==============================")
-    print("Set point : ")
-    print("Weight    : ")
-    print("Output    : ")
-    
+def build_arc_title():
+    """Return a Group of per-character labels arranged along a top arc."""
+    grp = displayio.Group()
+    n = len(TITLE_TEXT)
+    step = CHAR_ADV / ARC_RADIUS            # angular spacing per character (rad)
+    top = -math.pi / 2                      # straight up (screen y grows down)
+    for i, ch in enumerate(TITLE_TEXT):
+        theta = top + (i - (n - 1) / 2) * step
+        x = CX + ARC_RADIUS * math.cos(theta)
+        y = CY + ARC_RADIUS * math.sin(theta)
+        grp.append(label.Label(
+            terminalio.FONT, text=ch, scale=TITLE_SCALE, color=TITLE_COLOR,
+            anchor_point=(0.5, 0.5), anchored_position=(int(x), int(y))))
+    return grp
+
+
+title_group = build_arc_title()
+
+# Centered value labels.  The weight is largest since it's what you watch while
+# grinding; the output line recolors (green = grinding, grey = stopped).
+setpoint_lbl = label.Label(terminalio.FONT, text="", scale=2, color=0xFFFFFF,
+                           anchor_point=(0.5, 0.5), anchored_position=(CX, 100))
+weight_lbl = label.Label(terminalio.FONT, text="", scale=3, color=0xFFFFFF,
+                         anchor_point=(0.5, 0.5), anchored_position=(CX, 138))
+output_lbl = label.Label(terminalio.FONT, text="", scale=2, color=0xFFFFFF,
+                         anchor_point=(0.5, 0.5), anchored_position=(CX, 182))
+
+_group = displayio.Group()
+_group.append(_background)
+_group.append(title_group)
+_group.append(setpoint_lbl)
+_group.append(weight_lbl)
+_group.append(output_lbl)
+display.root_group = _group
 
 
 def draw_values(target, grams, output_on):
-    """Overwrite only the changing values in place (labels stay put)."""
-    # \033[<row>;<col>H positions the cursor; \033[K clears to end of line.
-    print("\033[{};{}H\033[K{:8.1f} g".format(
-        ROW_SETPOINT, VALUE_COL, target), end="")
-    print("\033[{};{}H\033[K{:8.1f} g".format(
-        ROW_WEIGHT, VALUE_COL, grams), end="")
-    print("\033[{};{}H\033[K{}  ({})".format(
-        ROW_OUTPUT, VALUE_COL, int(output_on),
-        "GRINDING" if output_on else "STOPPED"), end="")
-    # Park the cursor on a blank line below so it isn't sitting in a value field.
-    print("\033[9;1H", end="")
+    """Update the centered labels on the round display."""
+    setpoint_lbl.text = "Set {:.1f} g".format(target)
+    weight_lbl.text = "{:.1f} g".format(grams)
+    output_lbl.text = "GRINDING" if output_on else "STOPPED"
+    output_lbl.color = 0x00FF00 if output_on else 0x808080
 
 
 # --------------------------------------------------------------- initial paint
-draw_static()
 draw_values(set_point, weight, portb.value)
 last_tick = time.monotonic()
 
@@ -171,7 +237,7 @@ while True:
     # Keep the dial responsive and the sample window fresh every pass.
     update_setpoint()
     poll_scale()
-    check_button()
+    check_touch()
 
     now = time.monotonic()
     if now - last_tick >= DECISION_PERIOD:
