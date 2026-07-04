@@ -2,6 +2,8 @@ import time
 import board
 import rotaryio
 import digitalio
+import keypad
+import microcontroller
 from cedargrove_nau7802 import NAU7802
 
 # ============================================================================
@@ -39,10 +41,13 @@ portb = digitalio.DigitalInOut(board.PORTB_OUT)
 portb.direction = digitalio.Direction.OUTPUT
 portb.value = False
 
-# Bezel push button (GPIO42).  Active-low: value is False while held down.
-button = digitalio.DigitalInOut(board.BTN)
-button.direction = digitalio.Direction.INPUT
-button.pull = digitalio.Pull.UP
+# Bezel push button on GPIO42.  keypad.Keys handles debounce and edge events;
+# value_when_pressed=False because the button grounds the pin when pressed.
+bezel_button = keypad.Keys(
+    (microcontroller.pin.GPIO42,),
+    value_when_pressed=False,
+    pull=True,
+)
 
 # NAU7802 scale on Port A (explicit routing per CLAUDE.md).
 i2c = board.PORTA_I2C()
@@ -58,7 +63,6 @@ set_point = 20.0               # current target weight in grams (startup default
 last_position = encoder.position
 weight = 0.0                   # latest filtered weight in grams
 window = []                    # sliding window of the most recent raw counts
-button_was_down = False        # edge-detect state for the bezel button
 
 
 def clamp(value, low, high):
@@ -113,12 +117,10 @@ def tare():
 
 
 def check_button():
-    """Tare once on each fresh press of the bezel button (active-low)."""
-    global button_was_down
-    pressed = not button.value
-    if pressed and not button_was_down:
+    """Tare on each press of the bezel button (keypad handles debounce)."""
+    event = bezel_button.events.get()
+    if event and event.pressed:
         tare()
-    button_was_down = pressed
 
 
 def draw(target, grams, output_on):
