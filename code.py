@@ -26,6 +26,7 @@ MAX_SETPOINT = 5000.0      # ...or above this
 # --------------------------------------------------------------- scale config
 ACTIVE_CHANNEL = 1         # NAU7802 channel wired to the load cell (1 or 2)
 SMOOTHING = 10             # readings kept in the moving average (steadier = larger)
+ENCODER_SIGN = -1          # clockwise increases weight (this unit counts down CW)
 
 # ---------------------------------------------------------------- hardware init
 # Rotary encoder on the confirmed onboard pins.
@@ -79,7 +80,7 @@ while True:
     #    below zero and back up has no dead-zone at the clamp.
     position = encoder.position
     if position != last_position:
-        set_point += (position - last_position) * GRAMS_PER_DETENT
+        set_point += ENCODER_SIGN * (position - last_position) * GRAMS_PER_DETENT
         set_point = round(clamp(set_point, MIN_SETPOINT, MAX_SETPOINT), 1)
         last_position = position
         dirty = True
