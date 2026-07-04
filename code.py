@@ -113,7 +113,7 @@ def tare():
         ZERO_OFFSET = median_raw()
         weight = 0.0
         portb.value = weight < set_point
-        draw(set_point, weight, portb.value)   # immediate feedback
+        draw_values(set_point, weight, portb.value)   # immediate feedback
 
 
 def check_button():
@@ -123,20 +123,43 @@ def check_button():
         tare()
 
 
-def draw(target, grams, output_on):
-    """Redraw the serial console status panel."""
+# Console layout: 1-based rows of the changing values, and the column where
+# each value begins (just past the 12-character labels below).
+ROW_SETPOINT = 5
+ROW_WEIGHT = 6
+ROW_OUTPUT = 7
+VALUE_COL = 13
+
+
+def draw_static():
+    """Clear the screen and print the banner + labels once."""
     print("\033[2J\033[H")
     print("==============================")
     print("      GRIND BY WEIGHT         ")
     print("==============================")
-    print("Set point : {:8.1f} g".format(target))
-    print("Weight    : {:8.1f} g".format(grams))
-    print("Output    : {}  ({})".format(
-        int(output_on), "GRINDING" if output_on else "STOPPED"))
+    print("Set point : ")
+    print("Weight    : ")
+    print("Output    : ")
+    
+
+
+def draw_values(target, grams, output_on):
+    """Overwrite only the changing values in place (labels stay put)."""
+    # \033[<row>;<col>H positions the cursor; \033[K clears to end of line.
+    print("\033[{};{}H\033[K{:8.1f} g".format(
+        ROW_SETPOINT, VALUE_COL, target), end="")
+    print("\033[{};{}H\033[K{:8.1f} g".format(
+        ROW_WEIGHT, VALUE_COL, grams), end="")
+    print("\033[{};{}H\033[K{}  ({})".format(
+        ROW_OUTPUT, VALUE_COL, int(output_on),
+        "GRINDING" if output_on else "STOPPED"), end="")
+    # Park the cursor on a blank line below so it isn't sitting in a value field.
+    print("\033[9;1H", end="")
 
 
 # --------------------------------------------------------------- initial paint
-draw(set_point, weight, portb.value)
+draw_static()
+draw_values(set_point, weight, portb.value)
 last_tick = time.monotonic()
 
 # --------------------------------------------------------------- control loop
@@ -155,6 +178,6 @@ while True:
         weight = filtered_weight()
         portb.value = weight < set_point
 
-        draw(set_point, weight, portb.value)
+        draw_values(set_point, weight, portb.value)
 
     time.sleep(0.005)
