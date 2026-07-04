@@ -231,7 +231,10 @@ _line_palette[0] = 0x404040
 _divider = Rectangle(pixel_shader=_line_palette, width=display.width, height=2,
                      x=0, y=CY - 1)
 
-# Upper zone: the live measured weight (the value you watch while grinding).
+# Upper zone: a TARE hint above the live measured weight (the value you watch
+# while grinding).  Tapping anywhere in this upper half zeroes the scale.
+tare_lbl = label.Label(terminalio.FONT, text="TARE", scale=2, color=0x00FF00,
+                       anchor_point=(0.5, 0.5), anchored_position=(CX, 58))
 weight_lbl = label.Label(terminalio.FONT, text="", scale=3, color=0xFFFFFF,
                          anchor_point=(0.5, 0.5), anchored_position=(CX, 96))
 
@@ -245,6 +248,7 @@ _group = displayio.Group()
 _group.append(_background)
 _group.append(_divider)
 _group.append(title_group)
+_group.append(tare_lbl)
 _group.append(weight_lbl)
 _group.append(setpoint_lbl)
 _group.append(startstop_lbl)
