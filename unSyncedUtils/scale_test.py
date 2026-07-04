@@ -14,6 +14,11 @@ At the end it prints the two constants you need --
     ZERO_OFFSET and COUNTS_PER_GRAM
 -- so you can paste them into your main program and skip re-calibrating.
 
+USE:
+ZERO_OFFSET     = 591116
+COUNTS_PER_GRAM = 6124.6440
+
+
 Wiring assumes the Scale is powered at 3.3V (via an external regulator),
 with SDA/SCL/GND on Port A.  See CLAUDE.md.
 """
