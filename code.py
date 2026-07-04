@@ -181,7 +181,8 @@ TITLE_TEXT = "GRIND BY WEIGHT"
 TITLE_SCALE = 2
 TITLE_COLOR = 0xFFA500
 ARC_RADIUS = 106
-CHAR_ADV = 6 * TITLE_SCALE + 1  # per-character advance width, pixels (+1 spacing)
+CHAR_ADV = 6 * TITLE_SCALE + 5  # per-char arc spacing; extra gap so the ends,
+                                # where the curve steepens, don't run together
 
 
 def build_arc_title():
